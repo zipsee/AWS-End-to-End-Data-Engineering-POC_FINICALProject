@@ -1,0 +1,51 @@
+{
+  "Comment": "Financial POC - End-to-End Data Pipeline",
+  "StartAt": "BronzeToSilver",
+  "States": {
+    "BronzeToSilver": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "financial-poc-bronze-to-silver",
+        "Arguments": {
+          "--BUCKET": "financial-data-engineering-poc-bhargav-2026"
+        }
+      },
+      "Next": "SilverToGold",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "PipelineFailed"
+        }
+      ]
+    },
+    "SilverToGold": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "financial-poc-silver-to-gold",
+        "Arguments": {
+          "--BUCKET": "financial-data-engineering-poc-bhargav-2026"
+        }
+      },
+      "Next": "PipelineSucceeded",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "PipelineFailed"
+        }
+      ]
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed"
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Cause": "Financial data pipeline failed"
+    }
+  }
+}
