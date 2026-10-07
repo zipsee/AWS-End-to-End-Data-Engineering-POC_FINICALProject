@@ -1,1435 +1,933 @@
-# AWS End-to-End Data Engineering POC
+```markdown
+# AWS Financial Data Engineering POC
 
-## 📌 Project Overview
+## Overview
 
-This project is an **end-to-end AWS Data Engineering POC** designed to simulate a real-world financial data platform.
+This project is an end-to-end AWS Data Engineering POC for a financial data platform.
 
-The objective is to build a production-style data pipeline that handles:
+The main objective was to build and validate an event-driven data pipeline using AWS services for data ingestion, validation, transformation, orchestration, cataloging, and analytics.
 
-- Multiple data sources
-- File ingestion
-- Data validation
-- Data quality checks
-- ETL processing
-- Incremental processing
-- CDC
-- SCD Type 2
-- Data transformation
-- Data lake architecture
-- Star schema
-- Data partitioning
-- Error handling
-- Monitoring
-- Audit logging
-- Data reconciliation
-- Failure recovery
-- Cost and performance optimization
-- Infrastructure as Code
-
-The POC intentionally includes **production failure scenarios** so that each issue can be reproduced, investigated, fixed, and documented.
+The infrastructure was **initially created and tested using AWS CLI**. After validating the architecture, the infrastructure was converted into **Terraform Infrastructure as Code (IaC)** so that the environment can be recreated consistently and maintained through Git/GitHub.
 
 ---
 
-# 🏗️ Architecture
+## Architecture
 
 ```text
-                         ┌──────────────────────┐
-                         │      DATA SOURCES    │
-                         ├──────────────────────┤
-                         │ PostgreSQL / MySQL   │
-                         │ CSV / JSON Files     │
-                         │ REST API             │
-                         └──────────┬───────────┘
-                                    │
-                                    ▼
-                         ┌──────────────────────┐
-                         │     Amazon S3        │
-                         │      LANDING         │
-                         └──────────┬───────────┘
-                                    │
-                              S3 ObjectCreated
-                                    │
-                                    ▼
-                         ┌──────────────────────┐
-                         │   AWS Lambda         │
-                         │ Pre-Validation       │
-                         └──────────┬───────────┘
-                                    │
-                     ┌──────────────┴──────────────┐
-                     │                             │
-                  PASS                           FAIL
-                     │                             │
-                     ▼                             ▼
-             ┌──────────────┐             ┌────────────────┐
-             │    BRONZE    │             │    REJECTED    │
-             │    LAYER     │             │     FILES      │
-             └──────┬───────┘             └────────────────┘
-                    │
-                    ▼
-          ┌──────────────────────┐
-          │   AWS Glue / EMR     │
-          │      PySpark         │
-          └──────────┬───────────┘
-                     │
-                     ▼
-             DATA VALIDATION
-                     │
-              ┌──────┴──────┐
-              │             │
-             PASS          FAIL
-              │             │
-              ▼             ▼
-       TRANSFORMATION    QUARANTINE
-              │
-              ▼
-       POST TRANSFORMATION
-          VALIDATION
-              │
-              ▼
-        ┌──────────────┐
-        │    SILVER    │
-        │    LAYER     │
-        └──────┬───────┘
-               │
-               ▼
-        BUSINESS LOGIC
-        / SCD2 / CDC
-               │
-               ▼
-          ┌──────────┐
-          │   GOLD   │
-          │   LAYER  │
-          └────┬─────┘
-               │
-               ▼
-      POST-LOAD VALIDATION
-               │
-               ▼
-          ┌──────────┐
-          │ Athena   │
-          └────┬─────┘
-               │
-               ▼
-        ┌────────────┐
-        │ QuickSight │
-        └────────────┘
+                         SOURCE FILES
+                              |
+                              v
+                     +----------------+
+                     |   S3 LANDING   |
+                     +-------+--------+
+                             |
+                       S3 ObjectCreated
+                             |
+                             v
+                     +----------------+
+                     |     Lambda     |
+                     |  S3 Trigger   |
+                     +-------+--------+
+                             |
+                             v
+                  +-----------------------+
+                  |    Step Functions     |
+                  |     Orchestration     |
+                  +----------+------------+
+                             |
+                             v
+                  +-----------------------+
+                  | Glue Bronze -> Silver |
+                  |       PySpark         |
+                  +----------+------------+
+                             |
+                             v
+                     +---------------+
+                     |    SILVER     |
+                     | Validated Data|
+                     +-------+-------+
+                             |
+                             v
+                  +-----------------------+
+                  | Glue Silver -> Gold   |
+                  |       PySpark         |
+                  +----------+------------+
+                             |
+                             v
+                     +---------------+
+                     |     GOLD      |
+                     | Fact + Dims   |
+                     +-------+-------+
+                             |
+                             v
+                     +---------------+
+                     | Glue Crawler  |
+                     | Data Catalog   |
+                     +-------+-------+
+                             |
+                             v
+                     +---------------+
+                     |    Athena     |
+                     |  SQL Queries  |
+                     +---------------+
 ```
 
 ---
 
-# ☁️ AWS Services
+## AWS Services Used
 
-| Service | Purpose |
+| AWS Service | Purpose |
 |---|---|
-| Amazon S3 | Data Lake Storage |
-| AWS Lambda | S3 event trigger and pre-validation |
-| AWS Glue | ETL, Data Quality and Catalog |
-| Amazon EMR | Large-scale Spark processing |
+| Amazon S3 | Data Lake storage |
+| AWS Lambda | S3 event trigger |
+| AWS Glue | PySpark ETL and data validation |
 | AWS Step Functions | Pipeline orchestration |
-| Amazon EventBridge | Scheduling/event routing when required |
-| Amazon Athena | Serverless SQL analytics |
-| Amazon QuickSight | Dashboard and visualization |
+| AWS Glue Crawler | Catalog Gold datasets |
+| AWS Glue Data Catalog | Metadata management |
+| Amazon Athena | SQL analytics |
+| AWS IAM | Roles and permissions |
 | Amazon CloudWatch | Logs and monitoring |
-| Amazon SNS | Notifications |
-| Amazon SQS | Error handling / DLQ |
-| Amazon DynamoDB | Pipeline audit metadata |
-| AWS IAM | Access control |
-| AWS Glue Data Catalog | Metadata/catalog |
-| AWS Lake Formation | Data governance |
-| Terraform | Infrastructure as Code |
-| Jenkins / GitHub Actions | CI/CD |
+| AWS CLI | Initial infrastructure creation and testing |
+| Terraform | Infrastructure as Code and reproducible deployment |
 
 ---
 
-# 🗂️ S3 Data Lake Structure
+# S3 Data Lake
 
-Bucket:
-
-```text
-s3://financial-data-engineering-poc-<unique-name>/
-```
-
-Structure:
+The S3 data lake is organized into multiple processing layers.
 
 ```text
 financial-data-engineering-poc/
-│
-├── landing/
-│   ├── customer/
-│   ├── account/
-│   ├── product/
-│   ├── transaction/
-│   └── portfolio/
-│
-├── bronze/
-│   ├── customer/
-│   ├── account/
-│   ├── product/
-│   ├── transaction/
-│   └── portfolio/
-│
-├── silver/
-│   ├── customer/
-│   ├── account/
-│   ├── product/
-│   ├── transaction/
-│   └── portfolio/
-│
-├── gold/
-│   ├── fact_transaction/
-│   ├── fact_portfolio/
-│   ├── dim_customer/
-│   ├── dim_account/
-│   ├── dim_product/
-│   └── daily_portfolio_summary/
-│
-├── rejected/
-│   └── <entity>/
-│
-├── quarantine/
-│   ├── null/
-│   ├── duplicate/
-│   ├── schema/
-│   ├── datatype/
-│   ├── business_rule/
-│   └── referential_integrity/
-│
-├── archive/
-│
-├── audit/
-│   ├── pipeline_runs/
-│   ├── data_quality/
-│   └── reconciliation/
-│
-└── scripts/
+|
++-- landing/
+|   +-- customer/
+|   +-- account/
+|   +-- product/
+|   +-- transaction/
+|   +-- portfolio/
+|
++-- bronze/
+|   +-- customer/
+|   +-- account/
+|   +-- product/
+|   +-- transaction/
+|   +-- portfolio/
+|
++-- silver/
+|   +-- customer/
+|   +-- account/
+|   +-- product/
+|   +-- transaction/
+|   +-- portfolio/
+|
++-- gold/
+|   +-- dim_customer/
+|   +-- dim_account/
+|   +-- dim_product/
+|   +-- dim_portfolio/
+|   +-- dim_date/
+|   +-- fact_transaction/
+|   +-- daily_portfolio_summary/
+|
++-- quarantine/
+|   +-- null/
+|   +-- duplicate/
+|   +-- schema/
+|   +-- datatype/
+|   +-- business_rule/
+|
++-- rejected/
+|   +-- customer/
+|
++-- audit/
+|   +-- pipeline_runs/
+|   +-- data_quality/
+|
++-- archive/
+|
++-- scripts/
 ```
 
 ---
 
-# 📁 Partition Strategy
+# Bronze Layer
 
-For transaction-related data:
+The Bronze layer contains source-oriented data used for downstream processing.
 
-```text
-year=2026/
-month=10/
-day=06/
-```
+The Bronze to Silver Glue job supports:
 
-Example:
+- Customer
+- Account
+- Product
+- Transaction
+- Portfolio
 
-```text
-silver/transaction/
-    year=2026/
-        month=10/
-            day=06/
-```
+The processing includes:
 
-Partitioning will be implemented using PySpark:
-
-```python
-df.write \
-    .mode("append") \
-    .partitionBy("year", "month", "day") \
-    .parquet(output_path)
-```
-
-### Important
-
-Date partitions will **not be manually created**.
-
-Spark will create them during the write operation.
+- Schema validation
+- Required column validation
+- Data type validation
+- NULL validation
+- Duplicate validation
+- Primary key validation
+- Business rule validation
+- Quarantine handling
+- Audit output
+- Transformation to Parquet
 
 ---
 
-# 🥉 Bronze Layer
+# Silver Layer
 
-The Bronze layer stores data close to the source format after basic ingestion.
+The Silver layer contains validated and transformed data.
 
-Typical responsibilities:
-
-- Preserve source data
-- Add ingestion metadata
-- Add ingestion timestamp
-- Track source file
-- Track pipeline run ID
-- Perform basic schema handling
-- Convert raw data to an analytics-friendly format where appropriate
-
-Example metadata:
+The processing flow is:
 
 ```text
-source_file
-source_system
-ingestion_timestamp
-pipeline_run_id
+Raw / Bronze Data
+       |
+       v
+Schema Validation
+       |
+       v
+Data Type Validation
+       |
+       v
+NULL Validation
+       |
+       v
+Duplicate Validation
+       |
+       v
+Business Rule Validation
+       |
+       v
+Transformation
+       |
+       v
+Silver Parquet
 ```
+
+Processed data is stored in Parquet format.
 
 ---
 
-# 🥈 Silver Layer
+# Gold Layer
 
-Silver contains cleaned and transformed data.
+The Gold layer follows a star-schema design.
 
-Typical transformations:
-
-- Trim strings
-- Rename columns
-- Cast data types
-- Standardize dates
-- Standardize uppercase/lowercase
-- Remove duplicates
-- Handle NULL values
-- Apply business rules
-- Join datasets
-- Calculate derived columns
-- CDC processing
-- SCD Type 2 processing
-- Referential integrity validation
-
-Example:
+## Dimensions
 
 ```text
-amount = quantity * price
+dim_customer
+dim_account
+dim_product
+dim_portfolio
+dim_date
 ```
 
----
-
-# 🥇 Gold Layer
-
-Gold contains business-ready datasets.
-
-The POC follows a **Star Schema**.
-
-## Dimension Tables
-
-### dim_customer
+## Fact
 
 ```text
-customer_sk
-customer_id
-customer_name
-email
-city
-state
-country
-effective_date
-expiry_date
-is_current
+fact_transaction
 ```
 
-### dim_account
+The intended model is:
 
 ```text
-account_sk
-account_id
-customer_sk
-account_type
-account_status
-effective_date
-expiry_date
-is_current
-```
-
-### dim_product
-
-```text
-product_sk
-product_id
-product_name
-product_type
-risk_category
-effective_date
-expiry_date
-is_current
+                   dim_customer
+                        |
+                        |
+dim_product ---- fact_transaction ---- dim_account
+                        |
+                        |
+                     dim_date
 ```
 
 ---
 
-# Fact Tables
+# Fact Transaction
 
-## fact_transaction
+The central transaction fact contains:
 
 ```text
-transaction_sk
 transaction_id
-customer_sk
-account_sk
-product_sk
+customer_id
+account_id
+product_id
 transaction_date
 transaction_type
 quantity
 price
 amount
-```
-
-Example relationship:
-
-```text
-                dim_customer
-                     │
-                     │
-                     ▼
-dim_product ─── fact_transaction ─── dim_account
-```
-
----
-
-# 🔄 Data Validation Strategy
-
-Validation is performed at multiple stages.
-
-## 1. Pre-Validation
-
-Location:
-
-```text
-S3 Landing → Lambda
-```
-
-Checks:
-
-- File exists
-- File is not empty
-- File extension
-- Filename convention
-- Duplicate file
-- Basic header validation
-- Required columns
-
-If validation fails:
-
-```text
-landing → rejected/
-```
-
----
-
-## 2. Data-Level Validation
-
-Location:
-
-```text
-Bronze → Glue/EMR
-```
-
-Checks:
-
-- NULL values
-- Duplicate records
-- Schema mismatch
-- Data type validation
-- Invalid dates
-- Negative values
-- Referential integrity
-- Business rules
-
-Invalid records:
-
-```text
-bronze → quarantine/
-```
-
----
-
-## 3. Post-Transformation Validation
-
-After transformation:
-
-```text
-Bronze
-   ↓
-Transformation
-   ↓
-Post-Transformation Validation
-   ↓
-Silver
-```
-
-Checks:
-
-- Row count
-- NULL checks
-- Duplicate checks
-- Business rules
-- Referential integrity
-- Transformation correctness
-- Source-to-target reconciliation
-
----
-
-## 4. Post-Load Validation
-
-After loading Gold:
-
-```text
-Silver
-   ↓
-Gold
-   ↓
-Post-Load Validation
-   ↓
-Athena
-```
-
-Checks:
-
-- Source vs target row count
-- SUM reconciliation
-- Record existence
-- Partition availability
-- Data freshness
-- Sample record validation
-
----
-
-# 🔁 Incremental Processing
-
-The POC will implement incremental processing using:
-
-### AWS Glue Bookmarks
-
-Used to track processed data for supported Glue job inputs.
-
-### Watermark
-
-Example:
-
-```text
-last_processed_timestamp
-```
-
-Pipeline processes:
-
-```text
-WHERE updated_at > last_watermark
-```
-
-### Bookmark vs Watermark
-
-| Glue Bookmark | Watermark |
-|---|---|
-| AWS Glue feature | Application-controlled logic |
-| Tracks processed input | Tracks business/data timestamp |
-| Useful for file-based incremental processing | Useful for timestamp/ID based incremental processing |
-| Managed by Glue | Stored in metadata/control table |
-
-Both approaches will be tested in the POC.
-
----
-
-# 🔄 CDC
-
-The project will simulate:
-
-```text
-INSERT
-UPDATE
-DELETE
-```
-
-Example:
-
-```text
-customer_id = 101
-```
-
-Original:
-
-```text
-customer_name = John
-city = Hyderabad
-```
-
-Updated:
-
-```text
-customer_name = John
-city = Mumbai
-```
-
-The pipeline identifies the changed record using keys and change information.
-
----
-
-# ♻️ SCD Type 2
-
-Customer history will be maintained using:
-
-```text
-customer_sk
-customer_id
-effective_date
-expiry_date
-is_current
-```
-
-Example:
-
-```text
-customer_sk | customer_id | city       | effective_date | expiry_date | is_current
---------------------------------------------------------------------------------
-1           | 101         | Hyderabad  | 2026-01-01     | 2026-10-05  | N
-2           | 101         | Mumbai     | 2026-10-06     | 9999-12-31  | Y
-```
-
-This allows historical customer information to be preserved.
-
----
-
-# 🚨 Error Scenarios
-
-This POC intentionally generates bad data.
-
-## Data Quality Scenarios
-
-```text
-01_duplicates
-02_nulls
-03_schema_drift
-04_data_type_change
-05_bad_dates
-06_negative_values
-07_referential_integrity
-```
-
-## Spark / Data Distribution Scenarios
-
-```text
-08_skew
-09_hot_key
-10_multiple_hot_keys
-11_null_key_skew
-12_low_cardinality
-13_wrong_partitioning
-14_small_files
-```
-
-## Incremental / Processing Scenarios
-
-```text
-15_late_arriving
-16_out_of_order
-17_cdc
-18_scd2
-```
-
-## File-Level Scenarios
-
-```text
-19_corrupt_files
-20_empty_files
-21_large_volume
-```
-
----
-
-# 🔥 Production Failure Scenarios
-
-The POC will also simulate infrastructure and pipeline failures.
-
-### AWS Glue
-
-- Glue job failure
-- Glue timeout
-- Schema mismatch
-- Crawler failure
-- Bookmark issue
-
-### EMR
-
-- Spark OOM
-- Executor failure
-- Shuffle explosion
-- Skew
-- Wrong partitioning
-- Resource exhaustion
-- Job timeout
-
-### Lambda
-
-- Lambda timeout
-- Lambda retry
-- Duplicate S3 event
-- Permission failure
-
-### Step Functions
-
-- Task failure
-- Retry
-- Timeout
-- Partial pipeline failure
-- Duplicate pipeline execution
-
-### S3
-
-- AccessDenied
-- Missing file
-- Empty file
-- Corrupt file
-- Duplicate file
-
-### Athena
-
-- Table not found
-- Missing partitions
-- Too much data scanned
-- Incorrect schema
-
-### SQS/SNS
-
-- Message failure
-- Retry
-- Dead Letter Queue
-- Notification failure
-
-### IAM
-
-- AccessDenied
-- Missing permissions
-- Least privilege validation
-
----
-
-# 🧪 Failure Testing Methodology
-
-Every production issue will follow the same process:
-
-```text
-1. Generate bad data
-        ↓
-2. Run pipeline
-        ↓
-3. Observe failure
-        ↓
-4. Check CloudWatch / Spark logs
-        ↓
-5. Identify root cause
-        ↓
-6. Implement fix
-        ↓
-7. Rerun pipeline
-        ↓
-8. Validate output
-        ↓
-9. Document solution
-        ↓
-10. Prepare interview explanation
-```
-
----
-
-# 📊 Monitoring
-
-CloudWatch will be used for:
-
-- Lambda logs
-- Glue logs
-- EMR logs
-- Pipeline failures
-- Processing duration
-- Error counts
-- Data quality failures
-
-Example metrics:
-
-```text
-records_processed
-records_failed
-records_quarantined
-records_loaded
-pipeline_duration
-pipeline_status
-data_freshness
-```
-
----
-
-# 🔔 Alerting
-
-SNS will be used for pipeline notifications.
-
-Example:
-
-```text
-Pipeline SUCCESS
-Pipeline FAILED
-Data Quality FAILED
-SLA BREACHED
-```
-
-SQS/DLQ will be used for messages that cannot be successfully processed.
-
----
-
-# 📝 Audit Logging
-
-DynamoDB / S3 audit data will maintain:
-
-```text
-pipeline_run_id
-pipeline_name
-source
-entity
-start_time
-end_time
+currency
 status
-records_read
-records_processed
-records_failed
-records_loaded
-error_message
+updated_at
 ```
 
-Example:
+The fact table is designed for transaction-level financial analytics.
+
+---
+
+# Data Quality
+
+Data quality checks are performed during the Bronze to Silver processing.
 
 ```text
-RUN-20261006-001
+                 Input Data
+                     |
+                     v
+              Schema Validation
+                     |
+                     v
+             Data Type Validation
+                     |
+                     v
+               NULL Validation
+                     |
+                     v
+            Duplicate Validation
+                     |
+                     v
+            Primary Key Validation
+                     |
+                     v
+           Business Rule Validation
+                     |
+              +------+------+
+              |             |
+            Valid         Invalid
+              |             |
+              v             v
+           Silver       Quarantine
+```
+
+Invalid records are separated into quarantine locations:
+
+```text
+quarantine/
+|
++-- null/
++-- duplicate/
++-- schema/
++-- datatype/
++-- business_rule/
 ```
 
 ---
 
-# 🔐 Security
+# Event-Driven Pipeline
 
-The POC will implement:
+The pipeline is triggered when a new object is created in the S3 landing area.
 
-- IAM least privilege
-- S3 Block Public Access
-- S3 encryption
-- IAM roles for Glue/EMR/Lambda
-- No hard-coded credentials
-- Secrets stored outside source code
-- Optional AWS KMS encryption
-- Lake Formation governance
+```text
+File Upload
+     |
+     v
+S3 ObjectCreated Event
+     |
+     v
+Lambda
+     |
+     v
+Step Functions
+     |
+     v
+Glue Bronze -> Silver
+     |
+     v
+Glue Silver -> Gold
+```
+
+The S3 event notification is configured for the:
+
+```text
+landing/
+```
+
+prefix.
 
 ---
 
-# 💰 S3 Optimization
+# Step Functions
 
-The POC will test:
-
-### File Format
+Step Functions is used to orchestrate the ETL process.
 
 ```text
-CSV / JSON
-      ↓
-Parquet
-      ↓
-Snappy compression
+Start
+  |
+  v
+Bronze -> Silver
+  |
+  v
+Silver -> Gold
+  |
+  v
+Success
 ```
 
-### Partitioning
-
-Good:
+The workflow also contains failure handling.
 
 ```text
-year/month/day
-```
-
-Bad:
-
-```text
-customer_id
-transaction_id
-```
-
-High-cardinality columns can create too many partitions.
-
----
-
-# ⚡ Spark Optimization
-
-The project will demonstrate:
-
-### Repartition
-
-Used when increasing or redistributing partitions.
-
-```python
-df.repartition(20)
-```
-
-### Coalesce
-
-Used when reducing partitions without a full shuffle.
-
-```python
-df.coalesce(5)
-```
-
-### Broadcast Join
-
-For small dimension tables:
-
-```python
-from pyspark.sql.functions import broadcast
-
-df.join(
-    broadcast(dim_df),
-    "customer_id"
-)
-```
-
-### Caching
-
-Used only when the same DataFrame is reused multiple times.
-
-```python
-df.cache()
+Glue Failure
+     |
+     v
+Catch
+     |
+     v
+Pipeline Failed
 ```
 
 ---
 
-# 📦 Small File Problem
+# AWS CLI Implementation
 
-The POC will intentionally generate many small files.
+The initial AWS infrastructure was created and configured using **AWS CLI**.
 
-Example:
-
-```text
-100,000 files × 10 KB
-```
-
-Then optimize them into larger Parquet files.
-
-This will demonstrate:
-
-```text
-Small Files
-     ↓
-Too many S3 objects
-     ↓
-More metadata operations
-     ↓
-Poor Spark performance
-     ↓
-Higher processing overhead
-```
-
----
-
-# 🏗️ Infrastructure as Code
-
-Terraform will be used to provision infrastructure such as:
+This included:
 
 ```text
 S3
 IAM
 Lambda
 Glue
-DynamoDB
-SNS
-SQS
-CloudWatch
+Glue Crawler
 Step Functions
+Athena
+S3 Event Notification
+CloudWatch
 ```
 
-Example structure:
+Examples of AWS CLI operations used during the project:
+
+```bash
+aws sts get-caller-identity
+
+aws configure set region ap-south-1
+
+aws s3api create-bucket ...
+
+aws s3api put-bucket-versioning ...
+
+aws s3api put-bucket-encryption ...
+
+aws iam create-role ...
+
+aws iam put-role-policy ...
+
+aws glue create-job ...
+
+aws glue create-crawler ...
+
+aws lambda create-function ...
+
+aws stepfunctions create-state-machine ...
+
+aws athena create-work-group ...
+```
+
+The infrastructure was created and tested manually before being converted to Terraform.
+
+---
+
+# Testing Performed
+
+## Customer Pipeline
+
+Customer data was tested through the validation and transformation pipeline.
+
+Testing included:
+
+- Valid records
+- Invalid records
+- Data quality validation
+- Silver output
+- Quarantine/rejected data handling
+
+---
+
+## Transaction Pipeline
+
+A transaction file was uploaded into the S3 landing location.
+
+The upload triggered:
+
+```text
+S3
+ |
+ v
+Lambda
+ |
+ v
+Step Functions
+ |
+ v
+Glue Bronze -> Silver
+ |
+ v
+Glue Silver -> Gold
+```
+
+The Step Functions execution completed successfully.
+
+Transaction data was generated in the Silver layer and then written to the Gold:
+
+```text
+gold/fact_transaction/
+```
+
+A customer dimension was also generated in:
+
+```text
+gold/dim_customer/
+```
+
+---
+
+# Troubleshooting
+
+During testing, Athena initially returned:
+
+```text
+TABLE_NOT_FOUND:
+Table 'awsdatacatalog.financial_poc.fact_transaction' does not exist
+```
+
+## Root Cause
+
+The Glue crawler was initially configured only for:
+
+```text
+gold/dim_customer/
+```
+
+Therefore, the `fact_transaction` dataset was not registered in the Glue Data Catalog.
+
+## Fix
+
+The crawler target was changed to:
+
+```text
+gold/
+```
+
+The crawler was executed again.
+
+After the crawler completed, the Data Catalog contained:
+
+```text
+dim_customer
+fact_transaction
+gold
+```
+
+This validated the Gold cataloging process and demonstrated real pipeline troubleshooting.
+
+---
+
+# Terraform Infrastructure as Code
+
+After the AWS CLI implementation was validated, the infrastructure was converted into Terraform.
+
+Terraform is used as the **Infrastructure as Code implementation**, not simply as a backup.
+
+The Terraform configuration defines the core infrastructure required to recreate the pipeline.
+
+```text
+S3
+IAM
+Lambda
+Glue
+Glue Crawler
+Step Functions
+Athena
+S3 Event Notification
+```
+
+The workflow is:
+
+```text
+AWS CLI
+   |
+   v
+Build Infrastructure
+   |
+   v
+Test Pipeline
+   |
+   v
+Troubleshoot
+   |
+   v
+Validate Architecture
+   |
+   v
+Terraform
+   |
+   v
+Infrastructure as Code
+   |
+   v
+Git / GitHub
+```
+
+---
+
+# Terraform Structure
 
 ```text
 terraform/
-│
-├── provider.tf
-├── variables.tf
-├── outputs.tf
-├── s3.tf
-├── iam.tf
-├── lambda.tf
-├── glue.tf
-├── dynamodb.tf
-├── sns.tf
-├── sqs.tf
-├── stepfunctions.tf
-└── cloudwatch.tf
+|
++-- provider.tf
++-- variables.tf
++-- outputs.tf
++-- s3.tf
++-- iam.tf
++-- lambda.tf
++-- glue.tf
++-- stepfunctions.tf
++-- athena.tf
+|
++-- glue/
+|   +-- glue_bronze_to_silver.py
+|   +-- glue_silver_to_gold.py
+|
++-- lambda/
+    +-- s3_stepfunctions_trigger.py
 ```
 
 ---
 
-# 🔄 CI/CD
+# Terraform Commands
 
-The project will use GitHub/Jenkins for deployment.
+Initialize Terraform:
 
-Example:
+```bash
+terraform init
+```
+
+Validate the configuration:
+
+```bash
+terraform validate
+```
+
+Review infrastructure changes:
+
+```bash
+terraform plan
+```
+
+Deploy:
+
+```bash
+terraform apply
+```
+
+Destroy the Terraform-managed infrastructure:
+
+```bash
+terraform destroy
+```
+
+The Terraform configuration was validated successfully and the planned infrastructure contained:
 
 ```text
-Developer
-   ↓
-Git
-   ↓
-GitHub
-   ↓
-CI/CD
-   ↓
-Terraform
-   ↓
-AWS Infrastructure
-   ↓
-Deploy PySpark / Lambda Code
+Plan: 54 to add, 0 to change, 0 to destroy.
 ```
 
 ---
 
-# 📁 Proposed GitHub Repository
+# Security
+
+The project uses IAM roles for AWS services.
+
+Security-related configurations include:
+
+- IAM roles
+- IAM policies
+- S3 encryption
+- S3 versioning
+- S3 public access controls
+- Service-specific permissions
+- No AWS credentials stored in the repository
+
+AWS credentials are kept outside the Git repository.
+
+---
+
+# Data Format
+
+Source files can be provided as structured data files such as CSV.
+
+Processed data is stored in Parquet format.
 
 ```text
-aws-financial-data-engineering-poc/
-│
-├── README.md
-│
-├── data/
-│   ├── good/
-│   ├── duplicates/
-│   ├── nulls/
-│   ├── schema_drift/
-│   ├── datatype_change/
-│   ├── bad_dates/
-│   ├── negative_values/
-│   ├── referential_integrity/
-│   ├── skew/
-│   ├── hot_key/
-│   ├── multiple_hot_keys/
-│   ├── null_key_skew/
-│   ├── low_cardinality/
-│   ├── wrong_partitioning/
-│   ├── small_files/
-│   ├── late_arriving/
-│   ├── out_of_order/
-│   ├── cdc/
-│   ├── scd2/
-│   ├── corrupt_files/
-│   ├── empty_files/
-│   └── large_volume/
-│
-├── lambda/
-│   └── pre_validation/
-│
-├── glue/
-│   ├── ingestion/
-│   ├── validation/
-│   ├── transformation/
-│   ├── scd2/
-│   ├── cdc/
-│   └── reconciliation/
-│
-├── emr/
-│   ├── jobs/
-│   ├── optimization/
-│   └── failure_scenarios/
-│
-├── sql/
-│   ├── staging/
-│   ├── dimensions/
-│   ├── facts/
-│   └── validation/
-│
-├── step_functions/
-│   └── state_machine.json
-│
-├── terraform/
-│   ├── provider.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── s3.tf
-│   ├── iam.tf
-│   ├── lambda.tf
-│   ├── glue.tf
-│   ├── emr.tf
-│   ├── dynamodb.tf
-│   ├── sns.tf
-│   ├── sqs.tf
-│   ├── stepfunctions.tf
-│   └── cloudwatch.tf
-│
-├── tests/
-│   ├── data_quality/
-│   ├── integration/
-│   └── failure_scenarios/
-│
-└── docs/
-    ├── architecture/
-    ├── data_dictionary/
-    ├── failure_scenarios/
-    └── interview_notes/
-```
-
----
-
-# 🚀 Initial S3 Setup
-
-AWS CLI is being used from **Windows CMD**.
-
-## 1. Verify AWS CLI
-
-```cmd
-aws sts get-caller-identity
-```
-
----
-
-## 2. Set AWS Region
-
-```cmd
-aws configure set region ap-south-1
-```
-
-Verify:
-
-```cmd
-aws configure get region
-```
-
----
-
-## 3. Set Bucket Name
-
-```cmd
-set BUCKET=financial-data-engineering-poc-bhargav-2026
-```
-
-Verify:
-
-```cmd
-echo %BUCKET%
-```
-
----
-
-# 🪣 Create S3 Bucket
-
-Because the region is Mumbai:
-
-```cmd
-aws s3api create-bucket --bucket %BUCKET% --region ap-south-1 --create-bucket-configuration LocationConstraint=ap-south-1
-```
-
-Verify:
-
-```cmd
-aws s3 ls
-```
-
----
-
-# 🔐 Enable Versioning
-
-```cmd
-aws s3api put-bucket-versioning --bucket %BUCKET% --versioning-configuration Status=Enabled
-```
-
-Verify:
-
-```cmd
-aws s3api get-bucket-versioning --bucket %BUCKET%
-```
-
-Expected:
-
-```text
-Status: Enabled
-```
-
----
-
-# 🔒 Enable S3 Encryption
-
-```cmd
-aws s3api put-bucket-encryption --bucket %BUCKET% --server-side-encryption-configuration "{\"Rules\":[{\"ApplyServerSideEncryptionByDefault\":{\"SSEAlgorithm\":\"AES256\"}}]}"
-```
-
----
-
-# 🚫 Block Public Access
-
-```cmd
-aws s3api put-public-access-block --bucket %BUCKET% --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-```
-
----
-
-# 📂 Create Main S3 Prefixes
-
-```cmd
-aws s3api put-object --bucket %BUCKET% --key landing/
-aws s3api put-object --bucket %BUCKET% --key bronze/
-aws s3api put-object --bucket %BUCKET% --key silver/
-aws s3api put-object --bucket %BUCKET% --key gold/
-aws s3api put-object --bucket %BUCKET% --key rejected/
-aws s3api put-object --bucket %BUCKET% --key quarantine/
-aws s3api put-object --bucket %BUCKET% --key archive/
-aws s3api put-object --bucket %BUCKET% --key audit/
-aws s3api put-object --bucket %BUCKET% --key scripts/
-```
-
----
-
-# 🔍 Verify S3 Structure
-
-```cmd
-aws s3 ls s3://%BUCKET%/
-```
-
-Recursive:
-
-```cmd
-aws s3 ls s3://%BUCKET%/ --recursive
-```
-
----
-
-# 🎯 Project Goals
-
-By completing this POC, the following real-world Data Engineering concepts will be demonstrated:
-
-- AWS Data Lake
-- Medallion Architecture
-- S3
-- Lambda
-- Glue
-- EMR
-- PySpark
-- Athena
-- QuickSight
-- Step Functions
-- EventBridge
-- CDC
-- SCD Type 2
-- Incremental Processing
-- Glue Bookmarks
-- Watermarks
-- Data Quality
-- Data Validation
-- Data Reconciliation
-- Error Handling
-- SQS/DLQ
-- SNS
-- CloudWatch
-- DynamoDB Audit
-- IAM
-- Terraform
-- CI/CD
-- Spark Optimization
-- Data Skew
-- Partition Optimization
-- Small File Optimization
-- Production Troubleshooting
-
----
-
-# 🧑‍💻 Learning Approach
-
-This is not only a **happy-path pipeline**.
-
-The project will intentionally break the pipeline and solve real production problems.
-
-For every issue:
-
-```text
-CREATE ISSUE
-     ↓
-RUN PIPELINE
-     ↓
-OBSERVE FAILURE
-     ↓
-CHECK LOGS
-     ↓
-FIND ROOT CAUSE
-     ↓
-FIX
-     ↓
-RERUN
-     ↓
-VALIDATE
-     ↓
-DOCUMENT
-     ↓
-INTERVIEW ANSWER
-```
-
-This approach is intended to build both:
-
-**Hands-on AWS Data Engineering skills + Production troubleshooting skills.**
-
----
-
-# 📌 Project Status
-
-### Phase 1 — Architecture
-- [x] Architecture designed
-- [x] S3 structure designed
-- [x] Bronze/Silver/Gold defined
-- [x] Star schema designed
-- [x] Validation strategy defined
-- [x] Failure scenarios defined
-
-### Phase 2 — AWS Infrastructure
-- [x] AWS CLI configured
-- [x] S3 bucket creation
-- [x] Versioning
-- [x] Encryption
-- [x] Public access blocking
-- [ ] IAM
-- [ ] Lambda
-- [ ] Glue
-- [ ] EMR
-- [ ] Step Functions
-- [ ] SNS
-- [ ] SQS/DLQ
-- [ ] DynamoDB
-- [ ] CloudWatch
-
-### Phase 3 — Data
-- [ ] Generate clean datasets
-- [ ] Generate bad datasets
-- [ ] Upload datasets
-- [ ] Test ingestion
-
-### Phase 4 — Processing
-- [ ] Bronze ingestion
-- [ ] Data validation
-- [ ] Transformations
-- [ ] Silver
-- [ ] CDC
-- [ ] SCD2
-- [ ] Gold
-
-### Phase 5 — Analytics
-- [ ] Athena
-- [ ] QuickSight
-- [ ] Reconciliation
-- [ ] Data freshness
-
-### Phase 6 — Production Scenarios
-- [ ] Skew
-- [ ] Hot keys
-- [ ] Small files
-- [ ] OOM
-- [ ] Schema drift
-- [ ] Duplicate files
-- [ ] Late-arriving data
-- [ ] Pipeline retry
-- [ ] Partial failure
-- [ ] Idempotency
-
-### Phase 7 — DevOps
-- [ ] Terraform
-- [ ] CI/CD
-- [ ] GitHub Actions/Jenkins
-
----
-
-# 📚 Documentation
-
-Each major production scenario will have its own documentation:
-
-```text
-docs/failure_scenarios/
-```
-
-Example:
-
-```text
-docs/failure_scenarios/
-├── spark_oom.md
-├── data_skew.md
-├── small_files.md
-├── schema_drift.md
-├── late_arriving_data.md
-├── duplicate_files.md
-├── glue_failure.md
-├── lambda_timeout.md
-└── pipeline_retry.md
-```
-
-Each document will contain:
-
-```text
-Problem
-↓
-Why it happened
-↓
-How to reproduce
-↓
-Logs / symptoms
-↓
-Root cause
-↓
-Solution
-↓
-Optimization
-↓
-Interview explanation
-```
-
----
-
-# ⭐ Final Outcome
-
-The final project will represent a production-style AWS Financial Data Lake:
-
-```text
-Sources
-   ↓
-S3 Landing
-   ↓
-Lambda
-   ↓
-Pre-Validation
-   ↓
-Bronze
-   ↓
-Glue / EMR
-   ↓
-Data Validation
-   ↓
+Source File
+     |
+     v
+Validation
+     |
+     v
 Transformation
-   ↓
-Post-Transformation Validation
-   ↓
-Silver
-   ↓
-CDC / SCD2
-   ↓
-Gold
-   ↓
-Post-Load Validation
-   ↓
-Athena
-   ↓
-QuickSight
+     |
+     v
+Parquet
+     |
+     v
+Silver / Gold
 ```
 
-With:
+---
+
+# Current Implemented Scope
+
+The core implemented and tested architecture is:
 
 ```text
-Monitoring
-+
-Alerting
-+
-Audit
-+
-Error Handling
-+
-DLQ
-+
-Security
-+
-Terraform
-+
-CI/CD
-+
-Performance Optimization
+S3 Landing
+    |
+    v
+S3 ObjectCreated
+    |
+    v
+Lambda
+    |
+    v
+Step Functions
+    |
+    v
+Glue Bronze -> Silver
+    |
+    v
+Glue Silver -> Gold
+    |
+    v
+Glue Crawler
+    |
+    v
+Glue Data Catalog
+    |
+    v
+Athena
+```
+
+The customer and transaction flows were used for testing and validation.
+
+---
+
+# Current Limitations
+
+The following items are planned enhancements and are not represented as fully implemented production features in the current POC:
+
+- Full CDC implementation
+- SCD Type 2
+- Advanced incremental processing
+- DynamoDB audit framework
+- SNS alerting
+- SQS / DLQ
+- Lake Formation
+- EMR processing
+- CI/CD pipeline
+- Automated QuickSight deployment
+- Advanced Spark optimization
+- Full production monitoring
+- Complete daily batch marker / manifest implementation
+
+---
+
+# Future Enhancements
+
+Planned improvements include:
+
+1. Incremental processing
+2. Glue bookmarks
+3. Watermark processing
+4. CDC
+5. SCD Type 2
+6. Referential integrity checks
+7. Reconciliation framework
+8. DynamoDB pipeline audit
+9. SNS notifications
+10. SQS / DLQ
+11. CloudWatch dashboards
+12. QuickSight dashboard
+13. Spark performance optimization
+14. Small-file optimization
+15. Partition optimization
+16. GitHub Actions CI/CD
+17. Automated Terraform deployment
+
+---
+
+# Project Flow
+
+The project follows a practical Data Engineering workflow:
+
+```text
+Design
+  |
+  v
+Build with AWS CLI
+  |
+  v
+Test
+  |
+  v
+Find Failure
+  |
+  v
+Investigate Root Cause
+  |
+  v
+Fix
+  |
+  v
+Rerun
+  |
+  v
+Validate
+  |
+  v
+Convert to Terraform
+  |
+  v
+Store Infrastructure as Code in GitHub
 ```
 
 ---
 
-## 👨‍💻 Author
+# Interview Summary
 
-**Dundu Bhargav**
+### What did you build?
 
-AWS Data Engineer | PySpark | SQL | AWS | Data Lake | ETL
+I built an event-driven financial data pipeline on AWS using S3, Lambda,
+Step Functions, Glue, Glue Data Catalog and Athena.
+
+### How did you build it?
+
+I initially created and configured the AWS infrastructure using AWS CLI.
+This helped me understand how each AWS service was configured and how the
+services interacted.
+
+### How did you validate it?
+
+I uploaded test data, triggered the pipeline through S3 events, validated
+Step Functions executions, checked Glue processing, verified Silver and
+Gold outputs, and cataloged the Gold data using Glue Crawler.
+
+### Why Terraform?
+
+After validating the architecture using AWS CLI, I converted the
+infrastructure into Terraform so it could be recreated consistently and
+managed as Infrastructure as Code through Git/GitHub.
+
+### What did you troubleshoot?
+
+I encountered an Athena `TABLE_NOT_FOUND` error because the Glue crawler
+was only targeting the customer dimension path. I changed the crawler
+target to the complete Gold location, reran the crawler, and verified that
+`fact_transaction` was successfully registered in the Data Catalog.
 
 ---
 
-## ⭐ Purpose
+# Key Skills Demonstrated
 
-This repository is created as a **hands-on AWS Data Engineering learning and interview preparation project**, focusing on real-world production scenarios rather than only theoretical examples.
+```text
+AWS
+AWS CLI
+Amazon S3
+AWS Lambda
+AWS Glue
+PySpark
+AWS Step Functions
+Glue Data Catalog
+AWS Athena
+IAM
+CloudWatch
+Terraform
+Infrastructure as Code
+Data Lake
+ETL
+Data Quality
+Data Validation
+Parquet
+Star Schema
+Fact / Dimension Modelling
+Event-Driven Architecture
+Pipeline Orchestration
+Troubleshooting
+Git / GitHub
+```
+
+---
+
+# Final Architecture
+
+```text
+                         SOURCE DATA
+                              |
+                              v
+                       +-------------+
+                       | S3 LANDING  |
+                       +------+------+
+                              |
+                       ObjectCreated
+                              |
+                              v
+                       +-------------+
+                       |   LAMBDA    |
+                       +------+------+
+                              |
+                              v
+                    +-------------------+
+                    |  STEP FUNCTIONS   |
+                    +---------+---------+
+                              |
+                              v
+                    +-------------------+
+                    | BRONZE -> SILVER  |
+                    |      GLUE         |
+                    +---------+---------+
+                              |
+                              v
+                         +--------+
+                         | SILVER |
+                         +---+----+
+                             |
+                             v
+                    +-------------------+
+                    | SILVER -> GOLD    |
+                    |      GLUE         |
+                    +---------+---------+
+                              |
+                              v
+                         +--------+
+                         |  GOLD  |
+                         +---+----+
+                             |
+                             v
+                       +-----------+
+                       |   GLUE    |
+                       |  CRAWLER  |
+                       +-----+-----+
+                             |
+                             v
+                       +-----------+
+                       |  ATHENA   |
+                       +-----------+
+```
+
+---
+
+## Conclusion
+
+This project demonstrates an end-to-end AWS Data Engineering workflow,
+starting from manual AWS CLI infrastructure creation and validation,
+followed by event-driven ETL processing, data quality validation,
+orchestration, Gold-layer modelling, cataloging and Athena analytics.
+
+Once the architecture was validated using AWS CLI, the infrastructure was
+codified using Terraform to provide a reproducible and version-controlled
+Infrastructure as Code implementation suitable for Git/GitHub.
+```
