@@ -1,0 +1,11 @@
+customer_id,customer_name,email,phone,city,state,country,created_date,updated_at
+C001,Rahul Sharma,rahul.sharma@email.com,9876543210,Hyderabad,Telangana,India,2025-01-10,2026-10-01 09:15:00
+C002,Priya Reddy,priya.reddy@email.com,9876543211,Bengaluru,Karnataka,India,2025-01-15,2026-10-01 09:20:00
+C003,Amit Kumar,amit.kumar@email.com,9876543212,Mumbai,Maharashtra,India,2025-02-05,2026-10-01 09:25:00
+C004,Sneha Patel,sneha.patel@email.com,9876543213,Pune,Maharashtra,India,2025-02-12,2026-10-01 09:30:00
+C005,Arjun Singh,arjun.singh@email.com,9876543214,Delhi,Delhi,India,2025-03-01,2026-10-01 09:35:00
+C006,Neha Verma,neha.verma@email.com,9876543215,Chennai,Tamil Nadu,India,2025-03-15,2026-10-01 09:40:00
+C007,Vikram Rao,vikram.rao@email.com,9876543216,Visakhapatnam,Andhra Pradesh,India,2025-04-01,2026-10-01 09:45:00
+C008,Ananya Das,ananya.das@email.com,9876543217,Kolkata,West Bengal,India,2025-04-10,2026-10-01 09:50:00
+C009,Rohit Mehta,rohit.mehta@email.com,9876543218,Ahmedabad,Gujarat,India,2025-05-05,2026-10-01 09:55:00
+C010,Kavya Nair,kavya.nair@email.com,9876543219,Kochi,Kerala,India,2025-05-15,2026-10-01 10:00:00
