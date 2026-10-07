@@ -1,0 +1,10 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "states:StartExecution",
+      "Resource": "arn:aws:states:ap-south-1:758152040216:stateMachine:financial-poc-daily-pipeline"
+    }
+  ]
+}

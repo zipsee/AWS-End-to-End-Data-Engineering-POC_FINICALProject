@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "glue:StartJobRun",
+        "glue:GetJobRun",
+        "glue:GetJobRuns",
+        "glue:BatchStopJobRun"
+      ],
+      "Resource": [
+        "arn:aws:glue:*:*:job/financial-poc-bronze-to-silver",
+        "arn:aws:glue:*:*:job/financial-poc-silver-to-gold"
+      ]
+    }
+  ]
+}
