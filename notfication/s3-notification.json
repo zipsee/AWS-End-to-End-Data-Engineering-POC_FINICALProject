@@ -1,0 +1,20 @@
+{
+  "LambdaFunctionConfigurations": [
+    {
+      "LambdaFunctionArn": "arn:aws:lambda:ap-south-1:758152040216:function:financial-poc-s3-stepfunctions-trigger",
+      "Events": [
+        "s3:ObjectCreated:*"
+      ],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            {
+              "Name": "prefix",
+              "Value": "landing/"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
